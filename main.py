@@ -251,3 +251,62 @@ def hunt(query, language, language_filter, min_stars, max_stars, pushed_after,
 
 if __name__ == "__main__":
     cli()
+
+@cli.command()
+@click.option("--auth-token", "-t", default=None,
+              help="Bearer token for authenticated scanning")
+@click.option("--cookie", "-c", default=None,
+              help="Cookie string for authenticated scanning")
+@click.option("--max-pages", "-p", default=50, show_default=True,
+              help="Max pages to crawl per web target")
+@click.option("--iterations", "-i", default=12, show_default=True,
+              help="Claude loop iterations per target")
+@click.option("--output-script", "-o", default="run_scope.sh", show_default=True,
+              help="Output shell script filename")
+def scope(auth_token, cookie, max_pages, iterations, output_script):
+    """
+    Parse a Bugcrowd or HackerOne scope and generate scan commands.
+
+    Paste scope text when prompted, or pipe it in.
+
+    Examples:
+
+    \b
+      python main.py scope
+      python main.py scope --auth-token eyJ... --max-pages 30
+      cat scope.txt | python main.py scope
+    """
+    import sys
+
+    if not sys.stdin.isatty():
+        raw_scope = sys.stdin.read()
+    else:
+        console.print(Panel(
+            "Paste your Bugcrowd or HackerOne scope below.\n"
+            "Include everything -- in scope targets, wildcards, GitHub repos.\n"
+            "Press Ctrl+D when done.",
+            title="Scope Input",
+            border_style="cyan",
+        ))
+        lines = []
+        try:
+            while True:
+                line = input()
+                lines.append(line)
+        except EOFError:
+            pass
+        raw_scope = "\n".join(lines)
+
+    if not raw_scope.strip():
+        console.print("[red]No scope text provided.[/red]")
+        return
+
+    from scanner.scope_parser import parse_scope
+    parse_scope(
+        raw_scope=raw_scope,
+        auth_token=auth_token,
+        cookie=cookie,
+        max_pages=max_pages,
+        iterations=iterations,
+        output_script=output_script,
+    )
