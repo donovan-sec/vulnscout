@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+
+# Findings -- NEVER commit these, they contain vulnerability details
+findings/
+*.findings/
+vulnscout_*.md
+vulnscout_*.json
+
+# Cloned targets (temp dirs)
+/tmp/
+vulnscout_tmp*/
+
+# ASAN binaries
+*_asan
+*_asan_*
+target_asan
+
+# API keys / secrets
+.env
+.env.*
+*.env
+secrets.json
+
+# macOS
+.DS_Store
+.AppleDouble
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test artifacts
+*.core
+core.*
