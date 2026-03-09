@@ -1,0 +1,17 @@
+[Unit]
+Description=VulnScout MCP Server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/vulnscout
+Environment="ANTHROPIC_API_KEY=YOUR_KEY_HERE"
+Environment="GITHUB_TOKEN=YOUR_GITHUB_TOKEN_HERE"
+Environment="VULNSCOUT_DIR=/root/vulnscout"
+ExecStart=/root/vulnscout/.venv/bin/python /root/vulnscout/mcp_server.py --port 8000
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
