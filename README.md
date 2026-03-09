@@ -6,6 +6,7 @@ AI-powered vulnerability scanner using Claude in an agentic loop. Two modes:
 
 This is the same methodology Anthropic used to find 22 CVEs in Firefox: Claude reasons about code paths and generates targeted test inputs, a verifier confirms them, results feed back to Claude for deeper analysis.
 
+![VulnScout](vulnscout_logo.svg)
 ---
 
 ## Setup
