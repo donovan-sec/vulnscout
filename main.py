@@ -193,5 +193,61 @@ def webapp(url, auth_token, cookie, header, max_pages, iterations, output):
         console.print(f"[green]Reports saved to: {output}/[/green]")
 
 
+@cli.command()
+@click.argument("query")
+@click.option("--language", "-l", default=None,
+              help="GitHub language filter for search (e.g. 'c', 'cpp', 'python')")
+@click.option("--language-filter", "-L",
+              type=click.Choice(["c_cpp", "python", "javascript", "go", "rust", "java", "php", "ruby"]),
+              default=None,
+              help="Filter files to scan within each repo")
+@click.option("--min-stars", default=50, show_default=True,
+              help="Minimum stars")
+@click.option("--max-stars", default=2000, show_default=True,
+              help="Maximum stars")
+@click.option("--pushed-after", default="2024-01-01", show_default=True,
+              help="Only repos pushed after this date (YYYY-MM-DD)")
+@click.option("--max-repos", "-n", default=10, show_default=True,
+              help="Max repos to scan")
+@click.option("--iterations", "-i", default=12, show_default=True,
+              help="Claude loop iterations per repo")
+@click.option("--focus", "-f", default=None,
+              help="Focus on files matching this keyword")
+@click.option("--output", "-o", default="./findings",
+              help="Output directory for reports")
+@click.option("--skip-scanned", is_flag=True, default=True,
+              help="Skip repos already in findings dir")
+def hunt(query, language, language_filter, min_stars, max_stars, pushed_after,
+         max_repos, iterations, focus, output, skip_scanned):
+    """
+    Search GitHub and automatically scan matching repos.
+
+    QUERY is passed directly to GitHub search -- use the same syntax as GitHub.
+
+    Examples:
+
+    \b
+      python main.py hunt "topic:parser" --language c --language-filter c_cpp
+      python main.py hunt "topic:image-processing" --language c --max-repos 5
+      python main.py hunt "topic:authentication" --language python --focus auth
+      python main.py hunt "network protocol parser" --language c --min-stars 100
+    """
+    from scanner.hunter import hunt as run_hunt
+
+    run_hunt(
+        query=query,
+        language=language,
+        min_stars=min_stars,
+        max_stars=max_stars,
+        pushed_after=pushed_after,
+        max_repos=max_repos,
+        iterations=iterations,
+        focus=focus,
+        output_dir=output,
+        skip_scanned=skip_scanned,
+        language_filter=language_filter,
+    )
+
+
 if __name__ == "__main__":
     cli()
