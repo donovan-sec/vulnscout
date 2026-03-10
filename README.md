@@ -15,7 +15,8 @@ This is the same methodology Anthropic used to find 22 CVEs in Firefox: Claude r
 git clone <this repo>
 cd vulnscout
 pip install -r requirements.txt
-export ANTHROPIC_API_KEY=sk-ant-...
+cp .env.example .env   # fill in your keys
+python check.py        # verify everything before your first hunt
 ```
 
 ---
