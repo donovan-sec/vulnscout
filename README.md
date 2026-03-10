@@ -151,3 +151,147 @@ Anthropic's Firefox work cost ~$4k but that was exploit development, not just fi
 
 Only use on targets you own or have explicit written authorization to test. 
 The web scanner includes an authorization prompt that must be confirmed before scanning.
+
+---
+
+## Troubleshooting
+
+Common errors encountered during setup and how to fix them, in the order you're likely to hit them.
+
+---
+
+### 1. GitHub 401 Unauthorized
+
+**Symptom:**
+```
+GitHub search failed: 401 Client Error: Unauthorized
+```
+
+**Cause:** No GitHub token configured, or the token is invalid.
+
+**Fix:**
+```bash
+echo 'GITHUB_TOKEN=ghp_yourTokenHere' >> /home/kali/vulnscout/.env
+sudo systemctl restart vulnscout-mcp
+```
+
+Get a token at https://github.com/settings/tokens — minimum scope is `public_repo` (read-only).
+
+---
+
+### 2. Anthropic API Key Not Set
+
+**Symptom:**
+```
+Error: ANTHROPIC_API_KEY not set.
+Export it: export ANTHROPIC_API_KEY=sk-ant-...
+```
+
+**Cause:** The key is missing from the environment VulnScout runs in.
+
+> **Important:** Exporting the key in your shell (`export ANTHROPIC_API_KEY=...`) does NOT work — VulnScout runs as a systemd service with its own isolated environment. The key must be in `.env`.
+
+**Fix:**
+```bash
+cat > /home/kali/vulnscout/.env << 'EOF'
+ANTHROPIC_API_KEY=sk-ant-api03-yourKeyHere
+GITHUB_TOKEN=ghp_yourTokenHere
+EOF
+
+sudo systemctl restart vulnscout-mcp
+```
+
+**Verify the key loaded:**
+```bash
+sudo systemctl show vulnscout-mcp | grep ANTHROPIC
+```
+
+You should see the full key echoed back. If the output is blank, see the next section.
+
+---
+
+### 3. Environment Variables Not Loading
+
+**Symptom:**
+```bash
+sudo systemctl show vulnscout-mcp | grep ANTHROPIC
+# (blank output)
+```
+
+**Cause:** The service file has malformed `Environment=` lines — typically missing closing quotes or commented-out entries.
+
+**Fix — rewrite the service file using `tee`:**
+```bash
+sudo tee /etc/systemd/system/vulnscout-mcp.service << 'EOF'
+[Unit]
+Description=VulnScout MCP Server
+After=network.target
+
+[Service]
+Type=simple
+User=kali
+WorkingDirectory=/home/kali/vulnscout
+EnvironmentFile=/home/kali/vulnscout/.env
+Environment="VULNSCOUT_DIR=/home/kali/vulnscout"
+ExecStart=/home/kali/vulnscout/.venv/bin/python /home/kali/vulnscout/mcp_server.py --port 8000
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl restart vulnscout-mcp
+sudo systemctl show vulnscout-mcp | grep ANTHROPIC
+```
+
+---
+
+### 4. Permission Denied on Logs or Findings
+
+**Symptom:**
+```
+[Errno 13] Permission denied: '/home/kali/vulnscout/logs/hunt_XXXXXXXX.log'
+```
+
+**Cause:** Earlier runs as root created `logs/` and `findings/` owned by root, but the service runs as `kali`.
+
+**Fix:**
+```bash
+sudo chown -R kali:kali /home/kali/vulnscout/logs
+sudo chown -R kali:kali /home/kali/vulnscout/findings
+```
+
+---
+
+### Monitoring a Running Hunt
+
+You don't need the MCP interface to check progress. From the VPS directly:
+
+```bash
+# Stream the live log
+tail -f /home/kali/vulnscout/logs/hunt_JOBID.log
+
+# Check what findings have been saved
+ls -lh /home/kali/vulnscout/findings/
+```
+
+---
+
+### Tip: Use `tee` and `sed` Instead of `nano`
+
+When editing config files on a headless VPS, `tee` and `sed` are more reliable than interactive editors.
+
+**Write a file:**
+```bash
+cat > /home/kali/vulnscout/.env << 'EOF'
+ANTHROPIC_API_KEY=sk-ant-...
+GITHUB_TOKEN=ghp_...
+EOF
+```
+
+**Edit a single value in-place:**
+```bash
+sed -i 's|^ANTHROPIC_API_KEY=.*|ANTHROPIC_API_KEY=sk-ant-newKeyHere|' /home/kali/vulnscout/.env
+```
