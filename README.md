@@ -155,6 +155,91 @@ The web scanner includes an authorization prompt that must be confirmed before s
 
 ---
 
+## MCP Server — Control VulnScout from Claude.ai
+
+The MCP server (`mcp_server.py`) lets you start, monitor, and read findings from VulnScout directly in the Claude.ai chat window. It runs on your Kali VPS and exposes 8 tools.
+
+### Setup on Kali VPS
+
+```bash
+# Install dependencies
+cd /home/kali/vulnscout
+pip install -r requirements.txt
+
+# Copy and fill in your keys
+cp .env.example .env
+# Edit .env — set ANTHROPIC_API_KEY and GITHUB_TOKEN
+
+# Install and start the systemd service
+sudo cp vulnscout-mcp.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable vulnscout-mcp
+sudo systemctl start vulnscout-mcp
+
+# Verify it's running
+sudo systemctl status vulnscout-mcp
+```
+
+### Environment variables
+
+The service reads from `/home/kali/vulnscout/.env`. Both keys are required:
+
+| Variable | Description | Where to get it |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | Claude API key | console.anthropic.com |
+| `GITHUB_TOKEN` | GitHub PAT (read-only) | github.com/settings/tokens — scope: `public_repo` |
+
+> The service runs in an isolated environment — exporting variables in your shell won't work. They must be in `.env`.
+
+### Connect to Claude.ai
+
+1. Start the service (above)
+2. In Claude.ai → Settings → Integrations → Add custom integration
+3. URL: `http://YOUR_VPS_IP:8000/mcp`
+4. Name: VulnScout
+
+Once connected, the 8 tools below are available in any Claude.ai conversation.
+
+### MCP Tools Reference
+
+| Tool | What it does |
+|---|---|
+| `vulnscout_start_hunt` | Search GitHub for repos matching a query, scan up to 30, save findings |
+| `vulnscout_start_repo_scan` | Scan a single repo URL or local path |
+| `vulnscout_start_webapp` | Crawl a web app, generate and run HTTP test cases |
+| `vulnscout_get_status` | List all running and completed jobs with PIDs and start times |
+| `vulnscout_get_log` | Tail the log for a job (default 50 lines, up to 200) |
+| `vulnscout_stop_scan` | Stop a running job by job_id (findings saved so far are preserved) |
+| `vulnscout_list_findings` | List all finding reports in the findings directory |
+| `vulnscout_get_finding` | Read the full content of a finding report |
+
+### Example Claude.ai workflow
+
+Start a hunt from the chat window:
+> "Start a VulnScout hunt for C network protocol parsers, max 10 repos, focus on decode"
+
+Check progress:
+> "What's the status on the VulnScout hunt?"
+> "Show me the last 100 lines of the hunt log"
+
+Review findings:
+> "List VulnScout findings" → "Read the libfoo finding report"
+
+Stop if needed:
+> "Stop the VulnScout scan with job_id 20260502_143022"
+
+### Firewall note
+
+The MCP server binds to `0.0.0.0:8000` by default. If your VPS has a firewall, allow port 8000 from your IP only:
+
+```bash
+sudo ufw allow from YOUR_HOME_IP to any port 8000
+```
+
+Or use a private tunnel (Tailscale, Cloudflare Tunnel) for zero-exposure access.
+
+---
+
 ## Troubleshooting
 
 Common errors encountered during setup and how to fix them, in the order you're likely to hit them.
