@@ -289,19 +289,23 @@ def http_verifier(session, base_url):
 
 
 def scan_webapp(url, cookies=None, headers=None, auth_token=None,
-                max_pages=MAX_PAGES, max_iterations=15, output_dir=None):
+                max_pages=MAX_PAGES, max_iterations=15, output_dir=None,
+                platforms=None, use_memory=True):
     """
     Main entry point for web app scanning.
-    
+
     url: target base URL
     cookies: dict of cookies (use for authenticated scanning)
     headers: dict of custom headers
     auth_token: bearer token (added as Authorization header)
     max_pages: crawl depth limit
     max_iterations: Claude loop iterations
+    platforms: optional list of bounty platforms for submission-ready output
+    use_memory: dedupe findings against prior scans of this target
     """
     from scanner.claude_loop import run_webapp_loop
     from scanner.reporter import write_report
+    from scanner import memory
 
     # Set up session
     session = requests.Session()
@@ -331,5 +335,15 @@ def scan_webapp(url, cookies=None, headers=None, auth_token=None,
         max_iterations=max_iterations,
     )
 
-    write_report(findings, mode="webapp", source=url, output_dir=output_dir)
+    # Web targets have no commit; memory dedupes findings across runs only.
+    if use_memory:
+        new_findings, known = memory.filter_new_findings(url, findings)
+        if known:
+            console.print(f"[dim]{len(known)} finding(s) already seen in a prior "
+                         f"scan -- not re-reported.[/dim]")
+        memory.record_scan(url, findings)
+        findings = new_findings
+
+    write_report(findings, mode="webapp", source=url,
+                 output_dir=output_dir, platforms=platforms)
     return findings

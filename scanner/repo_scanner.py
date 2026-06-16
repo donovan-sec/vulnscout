@@ -202,18 +202,21 @@ def build_harness_verifier(binary_path):
 
 
 def scan_repo(source, language=None, binary_path=None, max_iterations=15,
-              focus_area=None, output_dir=None):
+              focus_area=None, output_dir=None, platforms=None, use_memory=True):
     """
     Main entry point for repo scanning.
-    
+
     source: git URL or local directory path
     language: optional filter ('c_cpp', 'python', 'javascript', etc.)
     binary_path: optional ASAN binary for hard verification
     max_iterations: Claude loop iterations per chunk
     focus_area: optional substring to filter filenames (e.g. 'auth', 'parser')
+    platforms: optional list of bounty platforms for submission-ready output
+    use_memory: skip unchanged repos + dedupe findings across runs
     """
     from scanner.claude_loop import run_repo_loop
     from scanner.reporter import write_report
+    from scanner import memory
 
     tmp_dir = None
     base_path = source
@@ -223,6 +226,14 @@ def scan_repo(source, language=None, binary_path=None, max_iterations=15,
         if source.startswith("http") or source.startswith("git@"):
             tmp_dir = tempfile.mkdtemp(prefix="vulnscout_")
             base_path = clone_repo(source, tmp_dir)
+
+        # Cross-session memory: skip if this exact commit was already scanned.
+        current_commit = memory.get_commit(base_path)
+        if use_memory and memory.should_skip(source, current_commit):
+            console.print(f"[yellow]Skipping {source} -- already scanned at "
+                         f"commit {current_commit[:8] if current_commit else '?'}. "
+                         f"Use --no-memory to force.[/yellow]")
+            return []
 
         # Collect and prioritize files
         all_files = collect_files(base_path, language)
@@ -265,7 +276,17 @@ def scan_repo(source, language=None, binary_path=None, max_iterations=15,
             )
             all_findings.extend(findings)
 
-        write_report(all_findings, mode="repo", source=source, output_dir=output_dir)
+        # Dedupe against previously-reported findings for this target.
+        if use_memory:
+            new_findings, known = memory.filter_new_findings(source, all_findings)
+            if known:
+                console.print(f"[dim]{len(known)} finding(s) already seen in a prior "
+                             f"scan -- not re-reported.[/dim]")
+            memory.record_scan(source, all_findings, current_commit)
+            all_findings = new_findings
+
+        write_report(all_findings, mode="repo", source=source,
+                     output_dir=output_dir, platforms=platforms)
         return all_findings
 
     finally:

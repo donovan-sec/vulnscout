@@ -67,7 +67,12 @@ def cli():
               help="Max Claude loop iterations per chunk")
 @click.option("--output", "-o", default="./findings",
               help="Output directory for reports")
-def repo(source, language, binary, focus, iterations, output):
+@click.option("--platform", "-P", multiple=True,
+              type=click.Choice(["hackerone", "h1", "bugcrowd", "intigriti"]),
+              help="Emit submission-ready files for this platform (repeatable)")
+@click.option("--no-memory", is_flag=True, default=False,
+              help="Ignore cross-session memory (rescan + re-report everything)")
+def repo(source, language, binary, focus, iterations, output, platform, no_memory):
     """
     Scan a git repository or local source directory.
 
@@ -102,6 +107,8 @@ def repo(source, language, binary, focus, iterations, output):
         max_iterations=iterations,
         focus_area=focus,
         output_dir=output,
+        platforms=list(platform) or None,
+        use_memory=not no_memory,
     )
 
     console.print(f"\n[bold green]Scan complete. {len(findings)} confirmed finding(s).[/bold green]")
@@ -123,7 +130,13 @@ def repo(source, language, binary, focus, iterations, output):
               help="Max Claude loop iterations")
 @click.option("--output", "-o", default="./findings",
               help="Output directory for reports")
-def webapp(url, auth_token, cookie, header, max_pages, iterations, output):
+@click.option("--platform", "-P", multiple=True,
+              type=click.Choice(["hackerone", "h1", "bugcrowd", "intigriti"]),
+              help="Emit submission-ready files for this platform (repeatable)")
+@click.option("--no-memory", is_flag=True, default=False,
+              help="Ignore cross-session memory (re-report everything)")
+def webapp(url, auth_token, cookie, header, max_pages, iterations, output,
+           platform, no_memory):
     """
     Scan a web application by crawling and testing with Claude.
 
@@ -186,6 +199,8 @@ def webapp(url, auth_token, cookie, header, max_pages, iterations, output):
         max_pages=max_pages,
         max_iterations=iterations,
         output_dir=output,
+        platforms=list(platform) or None,
+        use_memory=not no_memory,
     )
 
     console.print(f"\n[bold green]Scan complete. {len(findings)} confirmed finding(s).[/bold green]")
@@ -217,8 +232,13 @@ def webapp(url, auth_token, cookie, header, max_pages, iterations, output):
               help="Output directory for reports")
 @click.option("--skip-scanned", is_flag=True, default=True,
               help="Skip repos already in findings dir")
+@click.option("--platform", "-P", multiple=True,
+              type=click.Choice(["hackerone", "h1", "bugcrowd", "intigriti"]),
+              help="Emit submission-ready files for this platform (repeatable)")
+@click.option("--no-memory", is_flag=True, default=False,
+              help="Ignore cross-session memory (rescan unchanged repos)")
 def hunt(query, language, language_filter, min_stars, max_stars, pushed_after,
-         max_repos, iterations, focus, output, skip_scanned):
+         max_repos, iterations, focus, output, skip_scanned, platform, no_memory):
     """
     Search GitHub and automatically scan matching repos.
 
@@ -246,6 +266,8 @@ def hunt(query, language, language_filter, min_stars, max_stars, pushed_after,
         output_dir=output,
         skip_scanned=skip_scanned,
         language_filter=language_filter,
+        platforms=list(platform) or None,
+        use_memory=not no_memory,
     )
 
 

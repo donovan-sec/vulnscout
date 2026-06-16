@@ -40,6 +40,12 @@ python main.py repo ./path/to/source --language c_cpp
 
 # With binary harness for crash confirmation (see below)
 python main.py repo https://github.com/org/project --binary ./target_asan
+
+# Emit submission-ready files for a bounty platform (repeatable)
+python main.py repo https://github.com/org/project -P hackerone -P bugcrowd
+
+# Force a full rescan, ignoring cross-session memory
+python main.py repo https://github.com/org/project --no-memory
 ```
 
 ### Web app scanning
@@ -59,7 +65,73 @@ python main.py webapp https://app.example.com -H "X-Api-Key: key123" -H "X-Tenan
 
 # Limit crawl depth (faster, less coverage)
 python main.py webapp https://app.example.com --max-pages 30 --iterations 10
+
+# Emit submission-ready files for a bounty platform
+python main.py webapp https://app.example.com --platform intigriti
 ```
+
+---
+
+## Bug bounty workflow
+
+VulnScout doesn't stop at "found a bug." Confirmed findings flow through a
+submission pipeline so they come out ready to file and get paid.
+
+### 1. Independent verifier (always on)
+
+Every PoC is reviewed by a second, fresh Claude call whose only job is to
+*disprove* the finding — looking for upstream sanitization, auth gates, runtime
+mitigations, or unreachable paths. Only findings it can't disprove proceed to
+binary/HTTP verification. This is the core false-positive filter and runs on
+every scan automatically.
+
+### 2. Chain / escalation analysis
+
+When a finding is confirmed, VulnScout runs a chaining pass that reasons about
+what the bug *enables* — IDOR → account takeover, SSRF → cloud metadata →
+credential theft, a memory primitive → code execution. If the chain points to a
+concrete next target, it's fed back into the live loop so VulnScout pursues the
+escalation in the same session. The result is recorded under **Chain /
+Escalation** in the report.
+
+### 3. Validation gate
+
+Before reporting, each finding goes through a 7-question quality gate modelled on
+real bounty triage (reproducible? impact concrete? asset precise? severity
+justified? remediation clear?). The gate *annotates* — it never drops findings —
+attaching a `score/7` checklist to the report so weak write-ups are obvious
+before you spend a submission slot.
+
+### 4. Platform-specific submissions
+
+Pass `--platform` / `-P` (repeatable) on any `repo`, `webapp`, or `hunt` command
+to emit a submission-ready markdown file per finding, formatted for the target
+platform:
+
+| Platform | Flag value(s) |
+|---|---|
+| HackerOne | `hackerone` or `h1` |
+| Bugcrowd | `bugcrowd` |
+| Intigriti | `intigriti` |
+
+Each file includes the platform's expected sections (summary, severity band /
+priority, steps to reproduce, PoC, impact, remediation) plus the chain and
+validation gate results.
+
+```bash
+python main.py hunt "topic:parser" --language c -P hackerone -P bugcrowd
+```
+
+### 5. Cross-session memory
+
+VulnScout remembers what it has scanned in `~/.vulnscout/memory.json`:
+
+- **Repo mode** — if a repo's HEAD commit is unchanged since the last scan, it's
+  skipped (great for `hunt` over a large set on a schedule).
+- **All modes** — confirmed findings are fingerprinted, so the same bug isn't
+  re-reported across runs. Only *new* findings make it into the report.
+
+Use `--no-memory` to force a full rescan and re-report everything.
 
 ---
 
@@ -93,8 +165,9 @@ The binary must accept input from stdin. If it takes a filename instead, modify 
 
 Reports land in `./findings/` (or wherever `--output` points):
 
-- `vulnscout_repo_<target>_<timestamp>.md` -- human-readable report with analysis, PoCs, and disclosure notes
+- `vulnscout_repo_<target>_<timestamp>.md` -- human-readable report with analysis, PoCs, chain/escalation, validation gate, and disclosure notes
 - `vulnscout_repo_<target>_<timestamp>.json` -- structured data for further processing
+- `vulnscout_repo_<target>_<timestamp>_<platform>_finding<N>.md` -- one submission-ready file per finding, when `--platform` is used
 
 **Important:** confirmed findings in static mode mean Claude produced a concrete, specific hypothesis. They still need manual validation before filing. Confirmed findings in binary/HTTP mode have been automatically verified.
 

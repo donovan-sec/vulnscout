@@ -13,14 +13,29 @@ from rich.table import Table
 console = Console()
 
 
-def write_report(findings, mode, source, output_dir=None):
-    """Write findings to markdown and JSON files."""
+def write_report(findings, mode, source, output_dir=None,
+                 platforms=None, run_validation=True):
+    """
+    Write findings to markdown and JSON files.
+
+    platforms: optional list of bounty platforms ('hackerone', 'bugcrowd',
+               'intigriti') to emit submission-ready per-finding files for.
+    run_validation: run the validation gate and annotate each finding.
+    """
     if not findings:
         console.print("\n[yellow]No confirmed findings to report.[/yellow]")
         console.print("[dim]This doesn't mean the target is clean -- it means nothing "
                      "was confirmed in static/HTTP verification mode. Review the console "
                      "output for unconfirmed hypotheses.[/dim]")
         return
+
+    # Validation gate: annotate each finding with a quality score (never drops).
+    if run_validation:
+        try:
+            from scanner.validation_gate import annotate_findings
+            annotate_findings(findings)
+        except Exception as e:
+            console.print(f"[yellow]Validation gate skipped: {e}[/yellow]")
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     target_slug = source.replace("https://", "").replace("http://", "").replace("/", "_")[:40]
@@ -81,6 +96,15 @@ def write_report(findings, mode, source, output_dir=None):
 
             fh.write("### Verifier Output\n\n")
             fh.write(f"```\n{finding['verifier_output']}\n```\n\n")
+
+            if finding.get("chain"):
+                fh.write("### Chain / Escalation\n\n")
+                fh.write(finding["chain"] + "\n\n")
+
+            if finding.get("validation"):
+                from scanner.validation_gate import gate_markdown
+                fh.write(gate_markdown(finding["validation"]) + "\n")
+
             fh.write("---\n\n")
 
         fh.write("## Disclosure Notes\n\n")
@@ -104,6 +128,19 @@ def write_report(findings, mode, source, output_dir=None):
         }, fh, indent=2)
 
     console.print(f"[green]JSON data saved: {json_path}[/green]")
+
+    # --- Platform-specific submission files ---
+    if platforms:
+        from scanner.report_formatters import write_platform_reports
+        for platform in platforms:
+            try:
+                written = write_platform_reports(
+                    findings, source, platform, out_path, base_name
+                )
+                console.print(f"[green]{platform} submission files: "
+                             f"{len(written)} written to {out_path}/[/green]")
+            except ValueError as e:
+                console.print(f"[red]{e}[/red]")
 
 
 def extract_severity(analysis_text):

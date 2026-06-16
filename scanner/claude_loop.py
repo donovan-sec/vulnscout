@@ -1,6 +1,11 @@
 """
 Core agentic loop -- feeds code/context to Claude, parses hypotheses,
 runs verifier, feeds results back. Both modes share this engine.
+
+Independent verifier pattern: every PoC goes through a second fresh Claude
+call that only sees the PoC + source context, with instructions to actively
+disprove the finding. Only if it can't disprove it does the finding proceed
+to binary/HTTP verification and get recorded.
 """
 
 import re
@@ -27,7 +32,7 @@ For each vulnerability you identify:
 4. Rate severity: CRITICAL / HIGH / MEDIUM / LOW
 5. Suggest a minimal fix
 
-If your previous hypothesis was wrong or didn't trigger, revise your approach. 
+If your previous hypothesis was wrong or didn't trigger, revise your approach.
 Don't repeat the same hypothesis. Look at different code paths.
 
 When you have nothing more to report, output <done/> to end the session."""
@@ -57,6 +62,139 @@ For each vulnerability hypothesis:
 If a test came back negative, revise your hypothesis. Don't repeat failed tests.
 When you have nothing more to test, output <done/> to end the session."""
 
+REPO_VERIFIER_PROMPT = """You are an adversarial security reviewer. You have been given a claimed vulnerability
+and its proof-of-concept from a separate analyst. Your job is to disprove it.
+
+Assume the finding is a false positive until proven otherwise. Search for:
+- Upstream validation or sanitization that neutralizes the input before it reaches the vulnerable site
+- Authentication or authorization gates that an attacker can't bypass
+- Compiler/runtime mitigations that prevent exploitation (ASLR, stack canaries, bounds checking)
+- Code paths that are unreachable from attacker-controlled input
+- Type constraints or invariants that make the exploit scenario impossible
+
+After your analysis, output one of:
+<verdict>CONFIRMED</verdict> -- you cannot find a reason it's a false positive
+<verdict>FALSE_POSITIVE</verdict> -- you found a specific reason it's not exploitable
+
+Follow the verdict tag with a one-paragraph explanation of your reasoning."""
+
+WEBAPP_VERIFIER_PROMPT = """You are an adversarial security reviewer. You have been given a claimed web vulnerability
+and the HTTP test request from a separate analyst. Your job is to disprove it.
+
+Assume the finding is a false positive until proven otherwise. Search for:
+- Server-side validation that rejects or sanitizes the input
+- Authentication/session checks that block unauthenticated access to the endpoint
+- CSRF protections, rate limits, or other controls that prevent exploitation
+- Framework-level protections (ORM parameterization, output encoding, etc.)
+- Whether the "successful" response criteria would actually indicate a real vulnerability
+
+After your analysis, output one of:
+<verdict>CONFIRMED</verdict> -- you cannot find a reason it's a false positive
+<verdict>FALSE_POSITIVE</verdict> -- you found a specific reason it's not exploitable
+
+Follow the verdict tag with a one-paragraph explanation of your reasoning."""
+
+
+def run_independent_verifier(poc, context, mode):
+    """
+    Fresh Claude call that only sees the PoC + context.
+    Actively tries to disprove the finding.
+    Returns (confirmed: bool, reasoning: str).
+    """
+    if mode == "repo":
+        system = REPO_VERIFIER_PROMPT
+        user_msg = f"""Claimed vulnerability proof-of-concept:
+
+{poc}
+
+Source context the analyst was reviewing:
+
+{context}
+
+Try to disprove this finding. Look for mitigations, guards, or unreachable paths."""
+    else:
+        system = WEBAPP_VERIFIER_PROMPT
+        user_msg = f"""Claimed vulnerability and HTTP test:
+
+{poc}
+
+Application context the analyst was reviewing:
+
+{context}
+
+Try to disprove this finding. Look for server-side controls that prevent exploitation."""
+
+    response = client.messages.create(
+        model="claude-opus-4-6",
+        max_tokens=1024,
+        system=system,
+        messages=[{"role": "user", "content": user_msg}],
+    )
+    reply = response.content[0].text
+
+    verdict_match = re.search(r"<verdict>(CONFIRMED|FALSE_POSITIVE)</verdict>", reply)
+    if verdict_match:
+        confirmed = verdict_match.group(1) == "CONFIRMED"
+    else:
+        # No verdict tag -- treat as confirmed to avoid silently dropping real findings
+        confirmed = True
+
+    return confirmed, reply
+
+
+REPO_CHAIN_PROMPT = """You are an exploitation strategist. A vulnerability was just confirmed in this
+codebase. Your job is to reason about what it ENABLES -- how it could be chained
+with other weaknesses or escalated into greater impact.
+
+Consider:
+- Does this give a primitive (read, write, exec, auth bypass) that unlocks a bigger attack?
+- Could it be combined with another finding to reach a more sensitive asset?
+- Does it escalate privileges, enable lateral movement, or expand blast radius?
+
+Be concrete and specific to this code. If there is no realistic chain, say so plainly.
+Output a short paragraph (no tags)."""
+
+WEBAPP_CHAIN_PROMPT = """You are an exploitation strategist. A vulnerability was just confirmed in this
+web application. Your job is to reason about what it ENABLES -- how it could be
+chained or escalated into greater impact.
+
+Consider:
+- IDOR -> mass data access or account takeover
+- XSS -> session theft -> account takeover
+- SSRF -> internal service access -> cloud metadata -> credential theft
+- Auth bypass -> admin access -> full compromise
+
+Be concrete and specific to this target. If there is no realistic chain, say so plainly.
+Output a short paragraph (no tags)."""
+
+
+def run_chain_analysis(finding_text, context, mode):
+    """
+    Fresh Claude call: given a confirmed finding, reason about escalation /
+    chaining. Returns a short paragraph (str), or "" on failure.
+    """
+    system = REPO_CHAIN_PROMPT if mode == "repo" else WEBAPP_CHAIN_PROMPT
+    user_msg = f"""Confirmed vulnerability:
+
+{finding_text}
+
+Context the analyst was reviewing:
+
+{context}
+
+What does this enable? How could it be chained or escalated?"""
+    try:
+        response = client.messages.create(
+            model="claude-opus-4-6",
+            max_tokens=1024,
+            system=system,
+            messages=[{"role": "user", "content": user_msg}],
+        )
+        return response.content[0].text.strip()
+    except Exception as e:
+        console.print(f"[yellow]Chain analysis skipped ({e}).[/yellow]")
+        return ""
+
 
 def extract_tag(text, tag):
     """Extract content from a custom XML tag."""
@@ -72,7 +210,7 @@ def is_done(text):
 def run_repo_loop(source_chunks, verifier_fn, max_iterations=15):
     """
     Agentic loop for source code analysis.
-    
+
     source_chunks: list of dicts with 'path' and 'content'
     verifier_fn: callable(poc_string) -> (bool, str) -- confirmed, details
     """
@@ -89,7 +227,7 @@ def run_repo_loop(source_chunks, verifier_fn, max_iterations=15):
 
 {source_context}
 
-Start with the highest-risk areas first. Focus on functions that handle 
+Start with the highest-risk areas first. Focus on functions that handle
 user-controlled input, memory allocation/deallocation, or authentication logic."""
 
     conversation.append({"role": "user", "content": initial_message})
@@ -119,29 +257,56 @@ user-controlled input, memory allocation/deallocation, or authentication logic."
             console.print(f"\n[bold]Testing PoC:[/bold]")
             console.print(Syntax(poc, "text", theme="monokai"))
 
+            # Independent verifier: fresh Claude call, actively tries to disprove
+            console.print("[dim]Running independent verifier...[/dim]")
+            iv_confirmed, iv_reasoning = run_independent_verifier(poc, source_context, "repo")
+
+            if not iv_confirmed:
+                console.print("[yellow]Independent verifier flagged as false positive -- skipping.[/yellow]")
+                console.print(Panel(iv_reasoning[:400], title="Verifier Reasoning", border_style="yellow"))
+                follow_up = f"""An independent reviewer assessed your PoC and flagged it as a likely false positive:
+
+{iv_reasoning}
+
+Revise your hypothesis. Look for a different code path or vulnerability class."""
+                conversation.append({"role": "user", "content": follow_up})
+                continue
+
+            # Independent verifier agreed -- now run binary/HTTP verifier
             confirmed, details = verifier_fn(poc)
 
             if confirmed:
                 console.print("[bold red]VULNERABILITY CONFIRMED[/bold red]")
+                console.print("[dim]Running chain analysis...[/dim]")
+                chain = run_chain_analysis(f"{reply}\n\nPoC:\n{poc}", source_context, "repo")
+                if chain:
+                    console.print(Panel(chain[:400], title="Chain / Escalation", border_style="magenta"))
                 findings.append({
                     "iteration": i + 1,
                     "analysis": reply,
                     "poc": poc,
                     "verifier_output": details,
+                    "iv_reasoning": iv_reasoning,
+                    "chain": chain,
                 })
-                follow_up = f"""Vulnerability confirmed. Verifier output:
+                follow_up = f"""Vulnerability confirmed by both independent review and verification. Output:
 
 {details}
 
-This finding has been recorded. Now look for additional vulnerabilities 
-in different parts of the codebase."""
+A chaining/escalation analysis suggested:
+
+{chain or '(no realistic chain identified)'}
+
+This finding has been recorded. If the chain above points to a concrete next
+target, pursue it with a new <poc>. Otherwise look for additional
+vulnerabilities in different parts of the codebase."""
             else:
                 console.print("[yellow]Not confirmed -- feeding result back.[/yellow]")
                 follow_up = f"""The PoC did not confirm the vulnerability. Verifier output:
 
 {details}
 
-Revise your hypothesis. Consider: different input format, different code path, 
+Revise your hypothesis. Consider: different input format, different code path,
 or a different vulnerability class entirely."""
         else:
             follow_up = "No PoC was included. Please provide a concrete test case in <poc> tags, or output <done/> if analysis is complete."
@@ -210,22 +375,48 @@ access control flaws, and injection points first."""
             console.print(f"\n[bold]Running test:[/bold]")
             console.print(Syntax(test_request_raw, "http", theme="monokai"))
 
+            # Independent verifier: fresh Claude call, actively tries to disprove
+            console.print("[dim]Running independent verifier...[/dim]")
+            iv_confirmed, iv_reasoning = run_independent_verifier(test_request_raw, context_summary, "webapp")
+
+            if not iv_confirmed:
+                console.print("[yellow]Independent verifier flagged as false positive -- skipping.[/yellow]")
+                console.print(Panel(iv_reasoning[:400], title="Verifier Reasoning", border_style="yellow"))
+                follow_up = f"""An independent reviewer assessed your test and flagged it as a likely false positive:
+
+{iv_reasoning}
+
+Revise your hypothesis. Look for a different endpoint or vulnerability class."""
+                conversation.append({"role": "user", "content": follow_up})
+                continue
+
+            # Independent verifier agreed -- now run live HTTP verifier
             confirmed, details = verifier_fn(test_request)
 
             if confirmed:
                 console.print("[bold red]VULNERABILITY CONFIRMED[/bold red]")
+                console.print("[dim]Running chain analysis...[/dim]")
+                chain = run_chain_analysis(f"{reply}\n\nTest:\n{test_request_raw}", context_summary, "webapp")
+                if chain:
+                    console.print(Panel(chain[:400], title="Chain / Escalation", border_style="magenta"))
                 findings.append({
                     "iteration": i + 1,
                     "analysis": reply,
                     "test_request": test_request_raw,
                     "verifier_output": details,
+                    "iv_reasoning": iv_reasoning,
+                    "chain": chain,
                 })
-                follow_up = f"""Vulnerability confirmed. Response details:
+                follow_up = f"""Vulnerability confirmed by both independent review and live test. Response:
 
 {details}
 
-This finding has been recorded. Now investigate other endpoints or 
-try to escalate this finding (e.g., if IDOR found, test for privilege escalation)."""
+A chaining/escalation analysis suggested:
+
+{chain or '(no realistic chain identified)'}
+
+This finding has been recorded. If the chain above points to a concrete next
+test, pursue it with a new <test_request>. Otherwise investigate other endpoints."""
             else:
                 console.print("[yellow]Not confirmed -- feeding result back.[/yellow]")
                 follow_up = f"""Test did not confirm the vulnerability. Response:

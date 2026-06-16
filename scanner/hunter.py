@@ -106,7 +106,7 @@ def already_scanned(repo_name, output_dir):
 def hunt(query, language=None, min_stars=50, max_stars=2000,
          pushed_after="2024-01-01", max_repos=10, iterations=15,
          focus=None, output_dir="./findings", skip_scanned=True,
-         language_filter=None):
+         language_filter=None, platforms=None, use_memory=True):
     """
     Main hunt loop:
     1. Search GitHub for repos
@@ -168,6 +168,8 @@ def hunt(query, language=None, min_stars=50, max_stars=2000,
                 max_iterations=iterations,
                 focus_area=focus,
                 output_dir=output_dir,
+                platforms=platforms,
+                use_memory=use_memory,
             )
 
             if findings:
