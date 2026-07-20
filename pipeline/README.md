@@ -1,6 +1,6 @@
 # pipeline/
 
-Three small scripts bridging `recon/`, `core/`, and `submit/`. Deliberately not one orchestrator — see VS-3 in the backlog for why (short version: use these manually a few times before locking in a workflow shape as a single CLI).
+Four small scripts bridging `recon/`, `core/`, and `submit/`. Deliberately not one orchestrator — see VS-3 in the backlog for why (short version: use these manually a few times before locking in a workflow shape as a single CLI).
 
 ## `recon-to-targets.ts`
 
@@ -12,6 +12,20 @@ Three small scripts bridging `recon/`, `core/`, and `submit/`. Deliberately not 
 bun run recon/src/cli.ts audit example.com --format json > recon-output.json
 bun pipeline/recon-to-targets.ts recon-output.json --program <h1-handle> --min-severity MEDIUM --out targets.txt
 core/.venv/bin/strix --target-list targets.txt
+```
+
+## `crawl-targets.ts`
+
+`recon/` → `core/`, content-discovery pass. Runs [cariddi](https://github.com/edoardottt/cariddi) against `recon-to-targets.ts`'s **already scope-checked** output, hunting for secrets/juicy endpoints/errors/info-leaks before Strix spends agent time on active exploitation. A leaked API key found here is already a disclosable finding on its own; a URL with errors/info matches but no secrets gets bucketed as a Strix follow-up candidate at URL granularity, not just domain.
+
+**External dependency, managed not vendored.** cariddi is GPL-3.0 — installed by `install.sh` as a pinned binary (`go install .../cariddi@v1.4.6`, not `@latest`) and invoked here via subprocess only. Nothing from cariddi is vendored or linked into this repo's own code, so `vulnscout`'s own codebase stays Apache-2.0-clean. Bump the pinned version deliberately (a schema change in a newer release would silently break the JSONL parsing here) — see `install.sh`'s `CARIDDI_VERSION`.
+
+**Behavior worth knowing before pointing this at anything** (both intentional cariddi design choices, not bugs, confirmed by reading `pkg/crawler/colly.go`): it **ignores robots.txt unconditionally** (no flag to change it) and **skips TLS certificate verification unconditionally**. Standard for a pentesting crawler, but only run this against explicitly authorized scope — same rule as `core/`. It does respect a `DomainGlob` restriction to the target's own host, so it won't wander off to arbitrary externally-linked sites.
+
+```bash
+bun pipeline/recon-to-targets.ts recon-output.json --program <h1-handle> --out targets.txt
+bun pipeline/crawl-targets.ts targets.txt --out-findings crawl-findings.md --out-targets crawl-followup.txt
+core/.venv/bin/strix --target-list crawl-followup.txt
 ```
 
 ## `seed_instruction.py`

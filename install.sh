@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
-# Unified install for VulnScout's three pieces: core/ (Strix), recon/ (mailrecon), submit/ (h1-brain).
-# Each piece keeps its own isolated environment — this script just drives all three from one command.
+# Unified install for VulnScout's three pieces: core/ (Strix), recon/ (mailrecon), submit/ (h1-brain),
+# plus cariddi (pipeline/crawl-targets.ts's external dependency, GPL-3.0, invoked as a pinned binary
+# — never vendored into this repo's own Apache-2.0-clean code, see pipeline/README.md).
+# Each piece keeps its own isolated environment — this script just drives all from one command.
 set -euo pipefail
+
+CARIDDI_VERSION="v1.4.6"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -16,6 +20,7 @@ require() {
 echo "==> Checking toolchain"
 require uv "Install from https://docs.astral.sh/uv/getting-started/installation/"
 require bun "Install from https://bun.sh"
+require go "Install from https://go.dev/dl/"
 
 echo "==> core/ (Strix) — Python 3.12 venv"
 cd "$ROOT/core"
@@ -31,6 +36,15 @@ echo "==> recon/ (mailrecon) — bun install"
 cd "$ROOT/recon"
 bun install
 
+echo "==> cariddi ($CARIDDI_VERSION, pinned) — go install"
+# Pinned, not @latest: a future cariddi release changing its JSON schema
+# would silently break pipeline/crawl-targets.ts's parsing. Bump this
+# version deliberately, not automatically.
+go install "github.com/edoardottt/cariddi/cmd/cariddi@${CARIDDI_VERSION}"
+if ! command -v cariddi >/dev/null 2>&1; then
+  echo "cariddi installed but not on PATH — add \$(go env GOPATH)/bin to your PATH." >&2
+fi
+
 echo "==> Environment file"
 cd "$ROOT"
 if [ ! -f .env ]; then
@@ -45,3 +59,4 @@ echo "==> Done."
 echo "  core/.venv/bin/strix --help"
 echo "  submit/.venv/bin/python submit/server.py"
 echo "  cd recon && bun run src/cli.ts --help"
+echo "  cariddi -h"
