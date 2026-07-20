@@ -41,21 +41,35 @@ def load_vulnerabilities(run_dir: Path) -> list[dict]:
             f"No vulnerabilities.json in {run_dir} -- either the run hasn't produced "
             f"any confirmed findings yet, or this isn't a real Strix run directory."
         )
-    return json.loads(vuln_path.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(vuln_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise SystemExit(f"{vuln_path} is not valid JSON: {e}") from e
+    if not isinstance(data, list):
+        raise SystemExit(f"{vuln_path} must be a JSON array of finding objects (Strix's own format)")
+    for i, item in enumerate(data):
+        if not isinstance(item, dict):
+            raise SystemExit(f"{vuln_path} entry {i} is not an object")
+    return data
 
 
 def find_similar(conn: sqlite3.Connection, finding: dict, program: str | None, limit: int = 5) -> list[dict]:
-    """FTS5 search over title using the finding's own title as the query."""
-    title = finding.get("title", "")
-    if not title:
+    """FTS5 search over title+body using the finding's own title as the query."""
+    title = finding.get("title") or ""
+    if not isinstance(title, str) or not title:
         return []
 
-    # FTS5 MATCH needs a query expression, not free text with punctuation --
-    # keep alnum tokens only, OR them together so a partial match still hits.
-    tokens = [t for t in "".join(c if c.isalnum() else " " for c in title).split() if len(t) > 2]
-    if not tokens:
+    # FTS5 MATCH needs a query expression, not free text with punctuation.
+    # Keep alnum tokens only, and double-quote each one so reserved FTS5
+    # operator words (AND/OR/NOT) that happen to appear in a Strix-generated
+    # title are treated as literal search terms instead of breaking the
+    # query -- unquoted tokens raised "fts5: syntax error" on titles like
+    # "AND-based SQL injection" (Forge review, 2026-07-20).
+    raw_tokens = [t for t in "".join(c if c.isalnum() else " " for c in title).split() if len(t) > 2]
+    if not raw_tokens:
         return []
-    match_query = " OR ".join(tokens[:8])
+    quoted_tokens = ['"' + t.replace('"', '""') + '"' for t in raw_tokens[:8]]
+    match_query = " OR ".join(quoted_tokens)
 
     sql = """
         SELECT dr.id, dr.title, dr.weakness_name, dr.program_handle, dr.bounty_amount
@@ -73,8 +87,8 @@ def find_similar(conn: sqlite3.Connection, finding: dict, program: str | None, l
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute(sql, params).fetchall()
-    except sqlite3.OperationalError:
-        # malformed MATCH query (e.g. all-stopword title) -- fail soft, not fatal
+    except sqlite3.OperationalError as e:
+        print(f"  (FTS query failed for this finding, skipping: {e})", file=sys.stderr)
         return []
     return [dict(r) for r in rows]
 
@@ -89,6 +103,8 @@ def main() -> None:
     if args.run_dir:
         run_dir = Path(args.run_dir)
     elif args.run_name:
+        if "/" in args.run_name or "\\" in args.run_name or args.run_name in (".", ".."):
+            parser.error("run_name must be a bare name, not a path -- use --run-dir to point at an arbitrary directory")
         run_dir = Path.cwd() / "strix_runs" / args.run_name
     else:
         parser.error("provide either run_name or --run-dir")
@@ -110,8 +126,8 @@ def main() -> None:
     conn = sqlite3.connect(f"file:{DISCLOSED_DB}?mode=ro", uri=True)
 
     for finding in findings:
-        title = finding.get("title", "(untitled)")
-        severity = finding.get("severity", "?").upper()
+        title = finding.get("title") or "(untitled)"
+        severity = (finding.get("severity") or "?").upper()
         print(f"\n{'=' * 70}")
         print(f"[{severity}] {title}  ({finding.get('id', '?')})")
         if finding.get("cwe"):

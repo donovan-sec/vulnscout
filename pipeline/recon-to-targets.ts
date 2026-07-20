@@ -50,10 +50,23 @@ interface DomainProfile {
 
 interface ScopeRow {
   asset_identifier: string;
+  asset_type: string | null;
   eligible_for_submission: number;
   eligible_for_bounty: number;
   max_severity: string | null;
 }
+
+// Asset types HackerOne uses for actual DNS/web hostnames. Anything else
+// (mobile app IDs, source code repos, hardware, etc.) must not authorize a
+// domain target just because the identifier string happens to match.
+const DOMAIN_ASSET_TYPES = new Set([
+  "URL",
+  "WILDCARD",
+  "CIDR", // matched by exact string only today -- see domainInScope note
+  null, // some programs leave asset_type unset for plain domain rows
+]);
+
+const KNOWN_FLAGS = new Set(["--program", "--min-severity", "--out"]);
 
 function parseArgs(argv: string[]) {
   const args: {
@@ -66,10 +79,23 @@ function parseArgs(argv: string[]) {
   const positional: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === "--program") args.program = argv[++i];
-    else if (a === "--min-severity") args.minSeverity = argv[++i] as Severity;
-    else if (a === "--out") args.out = argv[++i];
-    else positional.push(a);
+    if (a.startsWith("--") && !KNOWN_FLAGS.has(a)) {
+      usageAndExit(`unknown flag: ${a}`);
+    }
+    if (a === "--program") {
+      if (i + 1 >= argv.length || argv[i + 1].startsWith("--")) {
+        usageAndExit("--program requires a value");
+      }
+      args.program = argv[++i];
+    } else if (a === "--min-severity") {
+      if (i + 1 >= argv.length) usageAndExit("--min-severity requires a value");
+      args.minSeverity = argv[++i] as Severity;
+    } else if (a === "--out") {
+      if (i + 1 >= argv.length) usageAndExit("--out requires a value");
+      args.out = argv[++i];
+    } else {
+      positional.push(a);
+    }
   }
   args.input = positional[0];
   return args;
@@ -84,15 +110,23 @@ function usageAndExit(msg?: string): never {
 }
 
 // Domain-level match against a wildcard scope entry like "*.example.com" or
-// "example.com". Deliberately conservative: a bare apex entry does NOT cover
-// arbitrary subdomains unless the program explicitly listed a wildcard.
+// "example.com". Deliberately conservative in both directions:
+//   - a bare apex entry does NOT cover arbitrary subdomains unless the
+//     program explicitly listed a wildcard
+//   - a wildcard-only entry ("*.example.com") does NOT cover the apex
+//     ("example.com") -- HackerOne's own scope semantics treat these as
+//     distinct assets, and conflating them was a real false-positive bug
+//     (Forge review, 2026-07-20): a domain not actually in scope could pass
+//     the gate.
+// Does not handle non-hostname scope shapes (URL paths, CIDR ranges) --
+// those fail closed (return false) rather than guess, see DOMAIN_ASSET_TYPES.
 function domainInScope(domain: string, assetIdentifier: string): boolean {
   const d = domain.toLowerCase();
   const a = assetIdentifier.toLowerCase().trim();
   if (a === d) return true;
   if (a.startsWith("*.")) {
     const suffix = a.slice(1); // ".example.com"
-    return d.endsWith(suffix) || d === suffix.slice(1);
+    return d.endsWith(suffix) && d !== suffix.slice(1);
   }
   return false;
 }
@@ -109,7 +143,7 @@ function loadScopeRows(program: string): ScopeRow[] {
   try {
     const rows = db
       .query<ScopeRow, [string]>(
-        "SELECT asset_identifier, eligible_for_submission, eligible_for_bounty, max_severity FROM scopes WHERE program_handle = ?",
+        "SELECT asset_identifier, asset_type, eligible_for_submission, eligible_for_bounty, max_severity FROM scopes WHERE program_handle = ?",
       )
       .all(program);
     if (rows.length === 0) {
@@ -131,7 +165,22 @@ async function main() {
   const inputPath = resolve(args.input);
   if (!existsSync(inputPath)) usageAndExit(`input file not found: ${inputPath}`);
 
-  const profiles = JSON.parse(await Bun.file(inputPath).text()) as DomainProfile[];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await Bun.file(inputPath).text());
+  } catch (e) {
+    usageAndExit(`input file is not valid JSON: ${(e as Error).message}`);
+  }
+  if (!Array.isArray(parsed)) {
+    usageAndExit("input file must be a JSON array of DomainProfile objects (mailrecon's --format json output)");
+  }
+  for (const [i, p] of parsed.entries()) {
+    if (typeof p !== "object" || p === null || typeof (p as any).domain !== "string" || !Array.isArray((p as any).findings)) {
+      usageAndExit(`input file entry ${i} is not a valid DomainProfile (needs "domain": string and "findings": array)`);
+    }
+  }
+  const profiles = parsed as DomainProfile[];
+
   const minRank = SEVERITY_RANK[args.minSeverity];
   if (!minRank) usageAndExit(`invalid --min-severity: ${args.minSeverity}`);
 
@@ -142,9 +191,15 @@ async function main() {
   const droppedBelowThreshold: string[] = [];
 
   for (const profile of profiles) {
-    const worthInvestigating = profile.findings.some(
-      (f) => SEVERITY_RANK[f.severity] >= minRank || f.provable,
-    );
+    const worthInvestigating = profile.findings.some((f) => {
+      const rank = SEVERITY_RANK[f.severity];
+      if (rank === undefined) {
+        usageAndExit(
+          `finding "${f.id}" on ${profile.domain} has unrecognized severity "${f.severity}" -- expected one of ${Object.keys(SEVERITY_RANK).join(", ")}`,
+        );
+      }
+      return rank >= minRank || f.provable === true;
+    });
     if (!worthInvestigating) {
       droppedBelowThreshold.push(profile.domain);
       continue;
@@ -152,7 +207,10 @@ async function main() {
 
     if (scopeRows) {
       const inScope = scopeRows.some(
-        (row) => row.eligible_for_submission && domainInScope(profile.domain, row.asset_identifier),
+        (row) =>
+          row.eligible_for_submission &&
+          DOMAIN_ASSET_TYPES.has(row.asset_type) &&
+          domainInScope(profile.domain, row.asset_identifier),
       );
       if (!inScope) {
         droppedOutOfScope.push(profile.domain);

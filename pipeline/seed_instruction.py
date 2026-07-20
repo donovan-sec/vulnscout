@@ -69,6 +69,23 @@ async def main() -> None:
             ) from e
         raise SystemExit(f"HackerOne API error: {e}") from e
 
+    # server.py's _api_get retries a 429 three times then returns the
+    # response WITHOUT raise_for_status() -- hack() can silently proceed on
+    # a rate-limited/empty response, wipe cached scope rows for this handle,
+    # and produce a briefing that looks normal but has no real scope data
+    # behind it (Forge review, 2026-07-20). "No scopes found for this
+    # program." (server.py) fires on both a genuinely scope-less program
+    # AND a 429-degraded empty response -- can't tell them apart from the
+    # briefing text alone, so warn loudly rather than claim false certainty.
+    if "No scopes found for this program." in briefing:
+        print(
+            "WARNING: the briefing has no scope section. This can mean the program "
+            "genuinely has no bounty-eligible scope right now, OR it can mean the "
+            "HackerOne API call was rate-limited (429) and hack() silently proceeded "
+            "on an empty response. Verify manually before trusting this briefing.",
+            file=sys.stderr,
+        )
+
     out_path.write_text(briefing, encoding="utf-8")
     print(f"Wrote briefing to {out_path}", file=sys.stderr)
     print(f"\nRun Strix with:\n  core/.venv/bin/strix --target-list <targets> --instruction-file {out_path}")
