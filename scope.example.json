@@ -1,0 +1,6 @@
+{
+  "engagement": "acme-pentest-2026-q2",
+  "authorized": true,
+  "inScope": ["*.acme.com", "acme.com", "*.acme-staging.com"],
+  "outOfScope": ["legacy.acme.com", "*.partners.acme.com"]
+}
