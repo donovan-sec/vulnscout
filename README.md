@@ -11,13 +11,6 @@ An offensive-security toolkit for active web app and network pentesting, built f
 | `submit/` | [h1-brain](https://github.com/donovan-sec/h1-brain) | HackerOne-integrated MCP server. Pulls program scope, past findings, and public disclosures into a briefing, and is the natural last stop once `core/` confirms something worth filing. |
 | `legacy/` | Retired original VulnScout | The original Python/Claude-agentic-loop scanner this project started as. Kept for reference and history, not under active development. See `legacy/README.md` for its own docs. |
 
-## Why this shape
-
-VulnScout was originally a standalone Python tool using Claude in an agentic loop for CVE-hunting in C/C++ libraries (see `legacy/`). That approach is retired in favor of adopting [Strix](https://github.com/usestrix/strix) as the core engine and pivoting the whole project toward active web app + occasional network pentesting for bug bounty — a better match for where the value actually is.
-
-Strix was chosen over several alternatives (T3MP3ST, Pentagi, HexStrike AI, PentestGPT, CAI, hackingBuddyGPT) after direct comparison on three things that mattered most: a real Docker sandbox (not bolted on), proof-by-execution validation (a finding must produce a working exploit, not just an LLM's opinion that it's real), and a permissive Apache 2.0 license with no commercial-use restriction.
-
-`recon/` and `submit/` were folded in because they're the same workflow's other two phases, not separate projects: recon feeds targets into `core/`, `core/` produces validated findings, `submit/` turns those into a filed report.
 
 ## Getting started
 
