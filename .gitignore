@@ -30,6 +30,7 @@ target_asan
 # API keys / secrets
 .env
 .env.*
+!.env.example
 *.env
 secrets.json
 
