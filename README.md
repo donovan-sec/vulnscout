@@ -14,7 +14,11 @@ An offensive-security toolkit for active web app and network pentesting, built f
 
 ## Getting started
 
-Each subdirectory is self-contained with its own dependencies and setup — see the README in `core/`, `recon/`, and `submit/` for install and usage instructions specific to that piece. There is no unified install/build step across all three yet.
+```bash
+./install.sh
+```
+
+Sets up an isolated Python 3.12 venv for `core/` and `submit/`, installs `recon/`'s bun dependencies, and scaffolds a root `.env` from `.env.example`. Fill in your keys before running `core/` or `submit/` — see `.env.example` for what's required. Each subdirectory also has its own README with usage instructions specific to that piece.
 
 ## License
 
