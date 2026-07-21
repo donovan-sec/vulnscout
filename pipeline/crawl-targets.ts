@@ -166,12 +166,12 @@ async function main() {
   let followupCount = 0;
   let crawledCount = 0;
 
-  for (const line of stdout.split("\n")) {
-    const trimmed = line.trim();
+  for (const rawLine of stdout.split("\n")) {
+    const trimmed = rawLine.trim();
     if (!trimmed) continue;
     crawledCount++;
 
-    let parsed: CariddiLine;
+    let parsed: unknown;
     try {
       parsed = JSON.parse(trimmed);
     } catch {
@@ -179,25 +179,36 @@ async function main() {
       continue;
     }
 
-    const matches = parsed.matches;
-    if (!matches) continue;
+    // A well-formed-but-unexpected shape (matches.secrets as a non-array,
+    // parsed as null, etc.) must not throw mid-loop -- that would abandon
+    // earlier-parsed findings before the write below (Forge review,
+    // 2026-07-21). Skip only the offending line, keep everything already
+    // accumulated.
+    if (typeof parsed !== "object" || parsed === null || typeof (parsed as CariddiLine).url !== "string") {
+      console.error(`Skipping cariddi output line with unexpected shape: ${trimmed.slice(0, 100)}`);
+      continue;
+    }
+    const line = parsed as CariddiLine;
+    const matches = line.matches;
+    if (!matches || typeof matches !== "object") continue;
 
-    const secrets = matches.secrets ?? [];
-    const errors = matches.errors ?? [];
-    const infos = matches.infos ?? [];
+    const secrets = Array.isArray(matches.secrets) ? matches.secrets : [];
+    const errors = Array.isArray(matches.errors) ? matches.errors : [];
+    const infos = Array.isArray(matches.infos) ? matches.infos : [];
 
     if (secrets.length > 0) {
       secretsCount++;
-      findingLines.push(`### ${parsed.url}\n`);
-      findingLines.push(`Status: ${parsed.status_code} | Content-Type: ${parsed.content_type ?? "unknown"}\n`);
+      findingLines.push(`### ${line.url}\n`);
+      findingLines.push(`Status: ${line.status_code} | Content-Type: ${line.content_type ?? "unknown"}\n`);
       findingLines.push("**Secrets found:**");
       for (const s of secrets) {
+        if (typeof s?.name !== "string" || typeof s?.match !== "string") continue;
         findingLines.push(`- **${s.name}**: \`${s.match}\``);
       }
       findingLines.push("");
     } else if (errors.length > 0 || infos.length > 0) {
       followupCount++;
-      followupTargets.push(parsed.url);
+      followupTargets.push(line.url);
     }
   }
 
@@ -234,6 +245,10 @@ async function main() {
     console.error(
       `WARNING: cariddi exited with code ${exitCode} before finishing -- results above may be incomplete. stderr:\n${stderr}`,
     );
+    // Findings parsed before the crash are still written above -- this
+    // exit code is the only signal a caller has that the crawl was
+    // incomplete, so it must not report success (Forge review, 2026-07-21).
+    process.exitCode = 1;
   }
 }
 
